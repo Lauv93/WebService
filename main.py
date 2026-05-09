@@ -1,80 +1,153 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List
+import psycopg2
+import os
 import xml.etree.ElementTree as ET
 
 app = FastAPI()
 
-# "Base de datos" en memoria
-mascotas = []
+# 🔌 Conexión a Supabase PostgreSQL
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Modelo de datos
+conn = psycopg2.connect(DATABASE_URL)
+cursor = conn.cursor()
+
+# 📦 Modelo de datos
 class Mascota(BaseModel):
     id: int
     nombre: str
     especie: str
     edad: int
-    estado: str  # Disponible / Adoptado
+    estado: str
+
+
+# 🔹 Ruta principal
+@app.get("/")
+def inicio():
+    return {"mensaje": "API de mascotas funcionando con Supabase"}
 
 
 # 🔹 CREATE
 @app.post("/mascotas/")
 def crear_mascota(mascota: Mascota):
-    mascotas.append(mascota)
-    return {"mensaje": "Mascota creada"}
+
+    # Verificar si ya existe
+    cursor.execute("SELECT * FROM mascotas WHERE id = %s", (mascota.id,))
+    existe = cursor.fetchone()
+
+    if existe:
+        raise HTTPException(status_code=400, detail="La mascota ya existe")
+
+    cursor.execute("""
+        INSERT INTO mascotas (id, nombre, especie, edad, estado)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (
+        mascota.id,
+        mascota.nombre,
+        mascota.especie,
+        mascota.edad,
+        mascota.estado
+    ))
+
+    conn.commit()
+
+    return {"mensaje": "Mascota creada correctamente"}
 
 
 # 🔹 READ
-@app.get("/mascotas/", response_model=List[Mascota])
+@app.get("/mascotas/")
 def obtener_mascotas():
-    return mascotas
+
+    cursor.execute("SELECT * FROM mascotas")
+
+    datos = cursor.fetchall()
+
+    resultado = []
+
+    for d in datos:
+        resultado.append({
+            "id": d[0],
+            "nombre": d[1],
+            "especie": d[2],
+            "edad": d[3],
+            "estado": d[4]
+        })
+
+    return resultado
 
 
 # 🔹 UPDATE
 @app.put("/mascotas/{id}")
-def actualizar_mascota(id: int, mascota_actualizada: Mascota):
-    for i, m in enumerate(mascotas):
-        if m.id == id:
-            mascotas[i] = mascota_actualizada
-            return {"mensaje": "Mascota actualizada"}
-    raise HTTPException(status_code=404, detail="Mascota no encontrada")
+def actualizar_mascota(id: int, mascota: Mascota):
+
+    cursor.execute("""
+        UPDATE mascotas
+        SET nombre=%s,
+            especie=%s,
+            edad=%s,
+            estado=%s
+        WHERE id=%s
+    """, (
+        mascota.nombre,
+        mascota.especie,
+        mascota.edad,
+        mascota.estado,
+        id
+    ))
+
+    conn.commit()
+
+    return {"mensaje": "Mascota actualizada correctamente"}
 
 
 # 🔹 DELETE
 @app.delete("/mascotas/{id}")
 def eliminar_mascota(id: int):
-    for i, m in enumerate(mascotas):
-        if m.id == id:
-            mascotas.pop(i)
-            return {"mensaje": "Mascota eliminada"}
-    raise HTTPException(status_code=404, detail="Mascota no encontrada")
+
+    cursor.execute(
+        "DELETE FROM mascotas WHERE id=%s",
+        (id,)
+    )
+
+    conn.commit()
+
+    return {"mensaje": "Mascota eliminada correctamente"}
 
 
-# 🔹 REPORTE XML
+# 📊 REPORTE XML
 @app.get("/reporte/xml")
 def generar_xml():
+
+    cursor.execute("SELECT * FROM mascotas")
+
+    datos = cursor.fetchall()
+
     root = ET.Element("mascotas")
 
-    total = len(mascotas)
+    total = len(datos)
     adoptadas = 0
 
-    for m in mascotas:
+    for d in datos:
+
         mascota_xml = ET.SubElement(root, "mascota")
 
-        ET.SubElement(mascota_xml, "id").text = str(m.id)
-        ET.SubElement(mascota_xml, "nombre").text = m.nombre
-        ET.SubElement(mascota_xml, "especie").text = m.especie
-        ET.SubElement(mascota_xml, "edad").text = str(m.edad)
-        ET.SubElement(mascota_xml, "estado").text = m.estado
+        ET.SubElement(mascota_xml, "id").text = str(d[0])
+        ET.SubElement(mascota_xml, "nombre").text = d[1]
+        ET.SubElement(mascota_xml, "especie").text = d[2]
+        ET.SubElement(mascota_xml, "edad").text = str(d[3])
+        ET.SubElement(mascota_xml, "estado").text = d[4]
 
-        if m.estado.lower() == "adoptado":
+        if d[4].lower() == "adoptado":
             adoptadas += 1
 
     porcentaje = (adoptadas / total * 100) if total > 0 else 0
 
     resumen = ET.SubElement(root, "resumen")
-    ET.SubElement(resumen, "total").text = str(total)
-    ET.SubElement(resumen, "adoptadas").text = str(adoptadas)
-    ET.SubElement(resumen, "porcentaje").text = f"{porcentaje:.2f}%"
 
-    return ET.tostring(root, encoding="unicode")
+    ET.SubElement(resumen, "total_mascotas").text = str(total)
+    ET.SubElement(resumen, "mascotas_adoptadas").text = str(adoptadas)
+    ET.SubElement(resumen, "porcentaje_adoptadas").text = f"{porcentaje:.2f}%"
+
+    xml_resultado = ET.tostring(root, encoding="unicode")
+
+    return xml_resultado
