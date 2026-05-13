@@ -1,5 +1,4 @@
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import psycopg2
 import os
@@ -7,19 +6,13 @@ import xml.etree.ElementTree as ET
 
 app = FastAPI()
 
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # Conexión Supabase
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-conn = psycopg2.connect(DATABASE_URL)
+
+# Función para conectarse
+def get_conn():
+    return psycopg2.connect(DATABASE_URL)
 
 
 # Modelo
@@ -34,15 +27,14 @@ class Mascota(BaseModel):
 # Inicio
 @app.get("/")
 def inicio():
-    return {
-        "mensaje": "API de mascotas funcionando con Supabase"
-    }
+    return {"mensaje": "API de mascotas funcionando con Supabase"}
 
 
 # CREATE
 @app.post("/mascotas/")
 def crear_mascota(mascota: Mascota):
 
+    conn = get_conn()
     cursor = conn.cursor()
 
     cursor.execute(
@@ -54,40 +46,38 @@ def crear_mascota(mascota: Mascota):
 
     if existe:
         cursor.close()
+        conn.close()
 
         raise HTTPException(
             status_code=400,
             detail="La mascota ya existe"
         )
 
-    cursor.execute(
-        """
+    cursor.execute("""
         INSERT INTO mascotas
         (id,nombre,especie,edad,estado)
-        VALUES(%s,%s,%s,%s,%s)
-        """,
-        (
-            mascota.id,
-            mascota.nombre,
-            mascota.especie,
-            mascota.edad,
-            mascota.estado
-        )
-    )
+        VALUES (%s,%s,%s,%s,%s)
+    """, (
+        mascota.id,
+        mascota.nombre,
+        mascota.especie,
+        mascota.edad,
+        mascota.estado
+    ))
 
     conn.commit()
 
     cursor.close()
+    conn.close()
 
-    return {
-        "mensaje": "Mascota creada correctamente"
-    }
+    return {"mensaje":"Mascota creada correctamente"}
 
 
 # READ
 @app.get("/mascotas/")
 def obtener_mascotas():
 
+    conn = get_conn()
     cursor = conn.cursor()
 
     cursor.execute(
@@ -96,67 +86,60 @@ def obtener_mascotas():
 
     datos = cursor.fetchall()
 
-    cursor.close()
-
     resultado=[]
 
     for d in datos:
 
         resultado.append({
-
             "id":d[0],
             "nombre":d[1],
             "especie":d[2],
             "edad":d[3],
             "estado":d[4]
-
         })
+
+    cursor.close()
+    conn.close()
 
     return resultado
 
 
 # UPDATE
 @app.put("/mascotas/{id}")
-def actualizar_mascota(
-        id:int,
-        mascota:Mascota
-):
+def actualizar_mascota(id:int, mascota:Mascota):
 
-    cursor=conn.cursor()
+    conn = get_conn()
+    cursor = conn.cursor()
 
-    cursor.execute(
-        """
-        UPDATE mascotas
-        SET nombre=%s,
-            especie=%s,
-            edad=%s,
-            estado=%s
-        WHERE id=%s
-        """,
-
-        (
-            mascota.nombre,
-            mascota.especie,
-            mascota.edad,
-            mascota.estado,
-            id
-        )
-    )
+    cursor.execute("""
+    UPDATE mascotas
+    SET nombre=%s,
+        especie=%s,
+        edad=%s,
+        estado=%s
+    WHERE id=%s
+    """,(
+        mascota.nombre,
+        mascota.especie,
+        mascota.edad,
+        mascota.estado,
+        id
+    ))
 
     conn.commit()
 
     cursor.close()
+    conn.close()
 
-    return {
-        "mensaje":"Mascota actualizada correctamente"
-    }
+    return {"mensaje":"Mascota actualizada"}
 
 
 # DELETE
 @app.delete("/mascotas/{id}")
 def eliminar_mascota(id:int):
 
-    cursor=conn.cursor()
+    conn = get_conn()
+    cursor = conn.cursor()
 
     cursor.execute(
         "DELETE FROM mascotas WHERE id=%s",
@@ -166,17 +149,17 @@ def eliminar_mascota(id:int):
     conn.commit()
 
     cursor.close()
+    conn.close()
 
-    return {
-        "mensaje":"Mascota eliminada correctamente"
-    }
+    return {"mensaje":"Mascota eliminada"}
 
 
 # XML
 @app.get("/reporte/xml")
 def generar_xml():
 
-    cursor=conn.cursor()
+    conn = get_conn()
+    cursor = conn.cursor()
 
     cursor.execute(
         "SELECT * FROM mascotas"
@@ -184,14 +167,9 @@ def generar_xml():
 
     datos=cursor.fetchall()
 
-    cursor.close()
-
-    root=ET.Element(
-        "mascotas"
-    )
+    root=ET.Element("mascotas")
 
     total=len(datos)
-
     adoptadas=0
 
     for d in datos:
@@ -227,13 +205,11 @@ def generar_xml():
         ).text=d[4]
 
         if d[4].lower()=="adoptado":
-            adoptadas +=1
-
+            adoptadas+=1
 
     porcentaje=(
         adoptadas/total*100
-        if total>0
-        else 0
+        if total>0 else 0
     )
 
     resumen=ET.SubElement(
@@ -256,9 +232,10 @@ def generar_xml():
         "porcentaje_adoptadas"
     ).text=f"{porcentaje:.2f}%"
 
-    xml_resultado=ET.tostring(
+    cursor.close()
+    conn.close()
+
+    return ET.tostring(
         root,
         encoding="unicode"
     )
-
-    return xml_resultado
